@@ -13,7 +13,57 @@
             min-height: 100vh;
             padding: 20px;
         }
+        body.auth-locked { overflow: hidden; }
         .container { max-width: 900px; margin: 0 auto; }
+        .auth-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.56);
+            backdrop-filter: blur(12px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 5000;
+        }
+        .auth-box {
+            width: 100%;
+            max-width: 420px;
+            background: rgba(255,255,255,0.98);
+            border-radius: 24px;
+            padding: 28px;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.22);
+        }
+        .auth-box h2 {
+            margin-bottom: 10px;
+            color: #24324a;
+            font-size: 1.6rem;
+        }
+        .auth-box p {
+            color: #6b7890;
+            line-height: 1.8;
+            margin-bottom: 18px;
+        }
+        .auth-box input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #dbe2f0;
+            border-radius: 14px;
+            font-family: 'Tajawal', sans-serif;
+            font-size: 1rem;
+            margin-bottom: 12px;
+        }
+        .auth-box input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 4px rgba(102,126,234,0.12);
+        }
+        .auth-error {
+            min-height: 24px;
+            color: #eb3349;
+            font-weight: 700;
+            margin-top: 10px;
+        }
         .navbar {
             background: rgba(255,255,255,0.95);
             border-radius: 16px;
@@ -140,6 +190,16 @@
     </style>
 </head>
 <body>
+    <div class="auth-overlay" id="authOverlay">
+        <div class="auth-box">
+            <h2>دخول إدارة الأسئلة</h2>
+            <p>هذه الصفحة محمية بكلمة مرور. أدخل كلمة المرور للمتابعة.</p>
+            <input type="password" id="authPassword" placeholder="كلمة المرور" autocomplete="current-password">
+            <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="unlockPage()">دخول</button>
+            <div class="auth-error" id="authError"></div>
+        </div>
+    </div>
+
     <div class="container">
         <nav class="navbar">
             <div class="brand">نظام الامتحانات</div>
@@ -276,27 +336,70 @@
         </div>
     </div>
 
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-auth-compat.js"></script>
     <script>
         const STORAGE_KEY = 'smartExamData';
+        const AUTH_SESSION_KEY = 'wadiVaultAuth_v1';
+        const AUTH_HASH = '49e58018d1aa30eacbd70f789af777ddec92e6eb647c826131857cd8818fc0cd';
+        const FIREBASE_CONFIG = {
+            apiKey: 'AIzaSyDwONMRFVhM-6-zio-ylUxAy5q4EQtjlWA',
+            authDomain: 'examsystem-c554a.firebaseapp.com',
+            projectId: 'examsystem-c554a',
+            storageBucket: 'examsystem-c554a.firebasestorage.app',
+            messagingSenderId: '127469194735',
+            appId: '1:127469194735:web:c658c1b00635cdc5083a1a'
+        };
+        const EXAM_DOC_ID = 'default';
         let questions = [];
         let selectedType = 'mcq';
         let selectedTfAnswer = true;
+        let db = null;
+        let authReadyPromise = null;
+        let saveTimer = null;
 
-        function loadExamData() {
-            const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        function initializeFirebase() {
+            if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+            db = firebase.firestore();
+            authReadyPromise = firebase.auth().signInAnonymously();
+        }
+
+        function getExamPayload() {
+            return {
+                title: document.getElementById('examTitle').value.trim(),
+                description: document.getElementById('examDesc').value.trim(),
+                questions,
+                questionCount: questions.length,
+                totalTime: questions.reduce((sum, question) => sum + (Number(question.time) || 0), 0),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            };
+        }
+
+        async function loadExamData() {
+            await authReadyPromise;
+            const snapshot = await db.collection('exams').doc(EXAM_DOC_ID).get();
+            const saved = snapshot.exists ? snapshot.data() : {};
             questions = Array.isArray(saved.questions) ? saved.questions : [];
             document.getElementById('examTitle').value = saved.title || '';
             document.getElementById('examDesc').value = saved.description || '';
             renderQuestionsList();
         }
 
-        function saveExamData() {
-            const data = {
-                title: document.getElementById('examTitle').value.trim(),
-                description: document.getElementById('examDesc').value.trim(),
-                questions
-            };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        async function saveExamData() {
+            await authReadyPromise;
+            const payload = getExamPayload();
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            await db.collection('exams').doc(EXAM_DOC_ID).set(payload, { merge: true });
+        }
+
+        function scheduleExamSave() {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(() => {
+                saveExamData().catch(() => {
+                    showModal('❌', 'خطأ', 'تعذر حفظ التعديلات في Firebase');
+                });
+            }, 400);
         }
 
         function selectType(type) {
@@ -334,7 +437,7 @@
             document.getElementById('matchingContainer').appendChild(row);
         }
 
-        function addQuestion() {
+        async function addQuestion() {
             const text = document.getElementById('questionText').value.trim();
             const time = parseInt(document.getElementById('questionTime').value, 10);
             if (!text) return showModal('⚠️', 'تنبيه', 'يرجى كتابة نص السؤال');
@@ -367,7 +470,7 @@
             }
 
             questions.push(question);
-            saveExamData();
+            await saveExamData();
             renderQuestionsList();
             resetQuestionForm();
             showModal('✅', 'تمت الإضافة', 'تم حفظ السؤال بنجاح');
@@ -394,30 +497,29 @@
             }).join('');
         }
 
-        function deleteQuestion(index) {
+        async function deleteQuestion(index) {
             questions.splice(index, 1);
-            saveExamData();
+            await saveExamData();
             renderQuestionsList();
         }
 
-        function moveQuestion(index, direction) {
+        async function moveQuestion(index, direction) {
             const nextIndex = index + direction;
             if (nextIndex < 0 || nextIndex >= questions.length) return;
             const current = questions[index];
             questions[index] = questions[nextIndex];
             questions[nextIndex] = current;
-            saveExamData();
+            await saveExamData();
             renderQuestionsList();
         }
 
         function exportExam() {
-            saveExamData();
-            const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+            const data = getExamPayload();
             document.getElementById('jsonData').value = JSON.stringify(data, null, 2);
             showModal('📤', 'تم التصدير', 'تم وضع بيانات الامتحان في مربع JSON');
         }
 
-        function importExam() {
+        async function importExam() {
             try {
                 const json = document.getElementById('jsonData').value.trim();
                 if (!json) return showModal('⚠️', 'تنبيه', 'يرجى لصق بيانات JSON أولاً');
@@ -425,7 +527,7 @@
                 questions = Array.isArray(data.questions) ? data.questions : [];
                 document.getElementById('examTitle').value = data.title || '';
                 document.getElementById('examDesc').value = data.description || '';
-                saveExamData();
+                await saveExamData();
                 renderQuestionsList();
                 showModal('✅', 'تم الاستيراد', 'تم استيراد ' + questions.length + ' سؤال بنجاح');
             } catch (error) {
@@ -433,12 +535,13 @@
             }
         }
 
-        function clearExam() {
+        async function clearExam() {
             questions = [];
             document.getElementById('examTitle').value = '';
             document.getElementById('examDesc').value = '';
             document.getElementById('jsonData').value = '';
             localStorage.removeItem(STORAGE_KEY);
+            await saveExamData();
             renderQuestionsList();
             showModal('🗑️', 'تم المسح', 'تم مسح بيانات الامتحان');
         }
@@ -463,11 +566,64 @@
                 .replaceAll("'", '&#039;');
         }
 
-        document.getElementById('examTitle').addEventListener('input', saveExamData);
-        document.getElementById('examDesc').addEventListener('input', saveExamData);
-        selectType('mcq');
-        selectTf(true);
-        loadExamData();
+        async function sha256(value) {
+            const bytes = new TextEncoder().encode(value);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
+            return Array.from(new Uint8Array(hashBuffer)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+
+        function unlockUi() {
+            document.getElementById('authOverlay').style.display = 'none';
+            document.body.classList.remove('auth-locked');
+        }
+
+        async function unlockPage() {
+            const input = document.getElementById('authPassword');
+            const errorBox = document.getElementById('authError');
+            const hashed = await sha256(input.value);
+            if (hashed !== AUTH_HASH) {
+                errorBox.textContent = 'كلمة المرور غير صحيحة.';
+                input.focus();
+                input.select();
+                return;
+            }
+            sessionStorage.setItem(AUTH_SESSION_KEY, 'granted');
+            unlockUi();
+        }
+
+        function initProtection() {
+            document.body.classList.add('auth-locked');
+            if (sessionStorage.getItem(AUTH_SESSION_KEY) === 'granted') {
+                unlockUi();
+                return;
+            }
+            const input = document.getElementById('authPassword');
+            input.addEventListener('keydown', event => {
+                if (event.key === 'Enter') unlockPage();
+            });
+        }
+
+        document.getElementById('examTitle').addEventListener('input', scheduleExamSave);
+        document.getElementById('examDesc').addEventListener('input', scheduleExamSave);
+
+        async function initializePage() {
+            initProtection();
+            selectType('mcq');
+            selectTf(true);
+            initializeFirebase();
+            try {
+                await loadExamData();
+            } catch (error) {
+                const fallback = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+                questions = Array.isArray(fallback.questions) ? fallback.questions : [];
+                document.getElementById('examTitle').value = fallback.title || '';
+                document.getElementById('examDesc').value = fallback.description || '';
+                renderQuestionsList();
+                showModal('❌', 'خطأ', 'تعذر تحميل بيانات الامتحان من Firebase');
+            }
+        }
+
+        initializePage();
     </script>
 </body>
 </html>

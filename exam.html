@@ -221,8 +221,6 @@
         <nav class="navbar">
             <div class="brand">نظام الامتحانات</div>
             <div class="nav-links">
-                <a href="index.html">لوحة التحكم</a>
-                <a href="questions.html">إضافة الأسئلة</a>
                 <a class="active" href="exam.html">بدء الامتحان</a>
             </div>
         </nav>
@@ -260,7 +258,6 @@
 
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:20px;">
                 <button class="btn btn-success" onclick="startExam()">يلا يبدي</button>
-                <a class="btn btn-secondary" href="questions.html">تعديل الأسئلة</a>
             </div>
         </section>
 
@@ -273,18 +270,11 @@
                 <div class="stat-box"><div class="stat-num" id="lockedCorrect">0</div><div class="stat-label">إجابات صحيحة</div></div>
                 <div class="stat-box"><div class="stat-num" id="lockedCompletedAt">-</div><div class="stat-label">وقت الإنهاء</div></div>
             </div>
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:20px;">
-                <a class="btn btn-primary" href="index.html">الذهاب إلى لوحة التحكم</a>
-                <a class="btn btn-secondary" href="questions.html">إدارة الأسئلة</a>
-            </div>
         </section>
 
         <section id="emptyScreen" class="card hidden">
             <div class="card-title">لا توجد أسئلة</div>
-            <p>اذهب إلى صفحة إضافة الأسئلة وأنشئ امتحانًا أولًا.</p>
-            <div style="margin-top:20px;">
-                <a class="btn btn-primary" href="questions.html">إضافة الأسئلة</a>
-            </div>
+            <p>لم يتم تجهيز الامتحان بعد.</p>
         </section>
 
         <section id="examScreen" class="hidden">
@@ -327,10 +317,6 @@
                 <div class="stat-box"><div class="stat-num" id="statTime">0</div><div class="stat-label">ثانية</div></div>
             </div>
             <div id="resultsDetails"></div>
-            <div style="margin-top:20px; display:flex; gap:10px; flex-wrap:wrap;">
-                <a class="btn btn-primary" href="index.html">العودة إلى لوحة التحكم</a>
-                <a class="btn btn-secondary" href="questions.html">إدارة الأسئلة</a>
-            </div>
         </section>
     </div>
 
@@ -343,12 +329,27 @@
         </div>
     </div>
 
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-auth-compat.js"></script>
     <script>
         const STORAGE_KEY = 'smartExamData';
         const ATTEMPT_KEY = 'smartExamAttempt';
-        const examData = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-        const questions = Array.isArray(examData.questions) ? examData.questions : [];
-        const examSignature = getExamSignature(examData);
+        const CURRENT_ATTEMPT_ID_KEY = 'smartExamCurrentAttemptId';
+        const FIREBASE_CONFIG = {
+            apiKey: 'AIzaSyDwONMRFVhM-6-zio-ylUxAy5q4EQtjlWA',
+            authDomain: 'examsystem-c554a.firebaseapp.com',
+            projectId: 'examsystem-c554a',
+            storageBucket: 'examsystem-c554a.firebasestorage.app',
+            messagingSenderId: '127469194735',
+            appId: '1:127469194735:web:c658c1b00635cdc5083a1a'
+        };
+        const EXAM_DOC_ID = 'default';
+        let examData = {};
+        let questions = [];
+        let db = null;
+        let authReadyPromise = null;
+        let examSignature = '';
         let currentQIndex = 0;
         let userAnswers = [];
         let timerInterval = null;
@@ -357,6 +358,27 @@
         let skipTimeout = null;
         let selectedMatchLeft = null;
         let participantName = '';
+        let currentAttemptId = localStorage.getItem(CURRENT_ATTEMPT_ID_KEY) || '';
+
+        function initializeFirebase() {
+            if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+            db = firebase.firestore();
+            authReadyPromise = firebase.auth().signInAnonymously();
+        }
+
+        async function loadExamData() {
+            await authReadyPromise;
+            const snapshot = await db.collection('exams').doc(EXAM_DOC_ID).get();
+            examData = snapshot.exists ? snapshot.data() : JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+            questions = Array.isArray(examData.questions) ? examData.questions : [];
+            examSignature = getExamSignature(examData);
+            const savedAttempt = getAttemptState();
+            if (!savedAttempt || savedAttempt.examSignature !== examSignature) {
+                currentAttemptId = '';
+                localStorage.removeItem(CURRENT_ATTEMPT_ID_KEY);
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(examData));
+        }
 
         function getExamSignature(data) {
             return JSON.stringify({
@@ -401,7 +423,16 @@
             document.getElementById('nameAlert').classList.remove('show');
         }
 
-        function initializePage() {
+        async function initializePage() {
+            initializeFirebase();
+            try {
+                await loadExamData();
+            } catch (error) {
+                examData = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+                questions = Array.isArray(examData.questions) ? examData.questions : [];
+                examSignature = getExamSignature(examData);
+            }
+
             if (questions.length === 0) {
                 document.getElementById('startScreen').classList.add('hidden');
                 document.getElementById('emptyScreen').classList.remove('hidden');
@@ -431,7 +462,7 @@
             document.getElementById('lockedInfo').textContent = 'تم إنهاء الامتحان بواسطة ' + (attempt.participantName || 'الطالب') + '، ولا يمكن إعادة المحاولة لنفس الامتحان.';
         }
 
-        function startExam() {
+        async function startExam() {
             if (questions.length === 0 || isCurrentAttemptLocked()) return;
 
             const nameInput = document.getElementById('studentName');
@@ -447,13 +478,43 @@
             currentQIndex = 0;
             userAnswers = new Array(questions.length).fill(null);
             totalTime = 0;
+            currentAttemptId = db.collection('attempts').doc().id;
+            localStorage.setItem(CURRENT_ATTEMPT_ID_KEY, currentAttemptId);
 
-            localStorage.setItem(ATTEMPT_KEY, JSON.stringify({
+            const attemptState = {
                 examSignature,
+                examDocId: EXAM_DOC_ID,
+                examTitle: examData.title || '',
+                examDescription: examData.description || '',
+                attemptId: currentAttemptId,
                 participantName,
                 startedAt: new Date().toISOString(),
-                completed: false
-            }));
+                completedAt: null,
+                completed: false,
+                status: 'started',
+                totalQuestions: questions.length,
+                totalExamTime: questions.reduce((sum, question) => sum + (Number(question.time) || 0), 0),
+                answers: [],
+                results: []
+            };
+            localStorage.setItem(ATTEMPT_KEY, JSON.stringify(attemptState));
+            try {
+                await authReadyPromise;
+                const startPayload = {
+                    ...attemptState,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                };
+                await db.collection('attempts').doc(currentAttemptId).set(startPayload, { merge: true });
+                await db.collection('exams').doc(EXAM_DOC_ID).set({
+                    latestAttempt: attemptState,
+                    latestAttemptId: currentAttemptId,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            } catch (error) {
+                showNameAlert('تعذر تسجيل بداية المحاولة في Firebase. تحقق من الاتصال ثم حاول مرة أخرى.');
+                return;
+            }
 
             document.getElementById('startScreen').classList.add('hidden');
             document.getElementById('lockedScreen').classList.add('hidden');
@@ -667,7 +728,7 @@
             showQuestion(index);
         }
 
-        function finishExam() {
+        async function finishExam() {
             clearInterval(timerInterval);
             if (skipTimeout) clearTimeout(skipTimeout);
             document.getElementById('skipWarning').classList.remove('active');
@@ -675,17 +736,36 @@
             let correct = 0;
             let wrong = 0;
             let skipped = 0;
+            const resultDetails = [];
 
             const resultRows = questions.map((question, index) => {
                 const answer = userAnswers[index];
                 const isSkipped = answer === null || answer === 'SKIPPED';
                 if (isSkipped) {
                     skipped++;
+                    resultDetails.push({
+                        questionNumber: index + 1,
+                        questionType: question.type,
+                        questionText: question.text,
+                        userAnswer: 'لم تتم الإجابة',
+                        correctAnswer: getCorrectAnswerText(question),
+                        isCorrect: false,
+                        skipped: true
+                    });
                     return buildResultRow(question, index, 'skipped', 'لم تتم الإجابة', '');
                 }
                 const result = gradeQuestion(question, answer);
                 if (result.isCorrect) correct++;
                 else wrong++;
+                resultDetails.push({
+                    questionNumber: index + 1,
+                    questionType: question.type,
+                    questionText: question.text,
+                    userAnswer: result.userText,
+                    correctAnswer: result.correctText,
+                    isCorrect: result.isCorrect,
+                    skipped: false
+                });
                 return buildResultRow(question, index, result.isCorrect ? 'correct' : 'incorrect', result.userText, result.correctText);
             });
 
@@ -696,23 +776,51 @@
             document.getElementById('statSkipped').textContent = skipped;
             document.getElementById('statTotal').textContent = questions.length;
             document.getElementById('statTime').textContent = totalTime;
-            document.getElementById('resultsDetails').innerHTML = resultRows.join('');
+            document.getElementById('resultsDetails').innerHTML = '';
             document.getElementById('examScreen').classList.add('hidden');
             document.getElementById('resultsScreen').classList.remove('hidden');
 
-            localStorage.setItem(ATTEMPT_KEY, JSON.stringify({
+            const completedAttempt = {
                 examSignature,
+                examDocId: EXAM_DOC_ID,
+                examTitle: examData.title || '',
+                examDescription: examData.description || '',
+                attemptId: currentAttemptId,
                 participantName,
                 startedAt: getAttemptState()?.startedAt || new Date().toISOString(),
                 completedAt: new Date().toISOString(),
                 completed: true,
+                status: 'completed',
                 scorePercentage: percentage,
                 correctAnswers: correct,
                 wrongAnswers: wrong,
                 skippedAnswers: skipped,
                 totalQuestions: questions.length,
-                totalTime
-            }));
+                answeredQuestions: questions.length - skipped,
+                totalTime,
+                totalExamTime: questions.reduce((sum, question) => sum + (Number(question.time) || 0), 0),
+                answers: userAnswers,
+                results: resultDetails
+            };
+            localStorage.setItem(ATTEMPT_KEY, JSON.stringify(completedAttempt));
+            try {
+                await authReadyPromise;
+                if (!currentAttemptId) {
+                    currentAttemptId = db.collection('attempts').doc().id;
+                    localStorage.setItem(CURRENT_ATTEMPT_ID_KEY, currentAttemptId);
+                }
+                await db.collection('attempts').doc(currentAttemptId).set({
+                    ...completedAttempt,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+                await db.collection('exams').doc(EXAM_DOC_ID).set({
+                    latestAttempt: completedAttempt,
+                    latestAttemptId: currentAttemptId,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            } catch (error) {
+                console.error('Failed to save attempt to Firebase', error);
+            }
         }
 
         function gradeQuestion(question, answer) {
@@ -736,6 +844,13 @@
             }
             const isCorrect = question.pairs.every(pair => answer[pair.left] === pair.right);
             return { isCorrect, userText: 'تمت المطابقة', correctText: 'مطابقة صحيحة لكل زوج' };
+        }
+
+        function getCorrectAnswerText(question) {
+            if (question.type === 'mcq') return question.options[question.correct] || '';
+            if (question.type === 'tf') return question.correct ? 'صحيح' : 'خطأ';
+            if (question.type === 'text') return question.correct || '';
+            return 'مطابقة صحيحة لكل زوج';
         }
 
         function buildResultRow(question, index, className, userText, correctText) {
