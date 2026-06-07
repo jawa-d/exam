@@ -413,6 +413,40 @@
             return parts.length >= 3;
         }
 
+        function normalizeStudentName(value) {
+            return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+        }
+
+        function isSameStudentAttempt(attempt, normalizedName) {
+            const attemptName = attempt.normalizedParticipantName || normalizeStudentName(attempt.participantName);
+            return attemptName === normalizedName && attempt.completed === true;
+        }
+
+        async function findCompletedAttemptByName(normalizedName) {
+            const localAttempt = getAttemptState();
+            if (localAttempt && isSameStudentAttempt(localAttempt, normalizedName)) return localAttempt;
+
+            await authReadyPromise;
+            let snapshot = await db.collection('attempts')
+                .where('examDocId', '==', EXAM_DOC_ID)
+                .get();
+            let attempts = snapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .filter(attempt => isSameStudentAttempt(attempt, normalizedName));
+
+            if (!attempts.length) {
+                snapshot = await db.collection('attempts').get();
+                attempts = snapshot.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                    .filter(attempt => {
+                        const sameExam = !attempt.examDocId || attempt.examDocId === EXAM_DOC_ID;
+                        return sameExam && isSameStudentAttempt(attempt, normalizedName);
+                    });
+            }
+
+            return attempts[0] || null;
+        }
+
         function showNameAlert(message) {
             const alertBox = document.getElementById('nameAlert');
             alertBox.textContent = message;
@@ -421,6 +455,10 @@
 
         function hideNameAlert() {
             document.getElementById('nameAlert').classList.remove('show');
+        }
+
+        function showDuplicateNamePrompt(studentName) {
+            alert('الاسم "' + studentName + '" مسجل مسبقاً في هذا الامتحان.\nلا يمكن إعادة الامتحان بنفس الاسم الثلاثي.');
         }
 
         async function initializePage() {
@@ -445,9 +483,7 @@
             document.getElementById('examTotalTime').textContent = getTotalExamTime();
             document.getElementById('totalQNum').textContent = questions.length;
 
-            if (isCurrentAttemptLocked()) {
-                showLockedScreen(getAttemptState());
-            }
+            hideNameAlert();
         }
 
         function showLockedScreen(attempt) {
@@ -463,7 +499,7 @@
         }
 
         async function startExam() {
-            if (questions.length === 0 || isCurrentAttemptLocked()) return;
+            if (questions.length === 0) return;
 
             const nameInput = document.getElementById('studentName');
             const enteredName = nameInput.value.trim();
@@ -475,6 +511,20 @@
 
             hideNameAlert();
             participantName = enteredName;
+            const normalizedParticipantName = normalizeStudentName(participantName);
+            try {
+                const previousAttempt = await findCompletedAttemptByName(normalizedParticipantName);
+                if (previousAttempt) {
+                    showDuplicateNamePrompt(participantName);
+                    showLockedScreen(previousAttempt);
+                    showNameAlert('هذا الاسم الثلاثي أدى الامتحان مسبقاً ولا يمكنه إعادة المحاولة.');
+                    return;
+                }
+            } catch (error) {
+                showNameAlert('تعذر التحقق من تكرار الاسم. تحقق من الاتصال ثم حاول مرة أخرى.');
+                return;
+            }
+
             currentQIndex = 0;
             userAnswers = new Array(questions.length).fill(null);
             totalTime = 0;
@@ -488,6 +538,7 @@
                 examDescription: examData.description || '',
                 attemptId: currentAttemptId,
                 participantName,
+                normalizedParticipantName,
                 startedAt: new Date().toISOString(),
                 completedAt: null,
                 completed: false,
@@ -776,6 +827,7 @@
                 examDescription: examData.description || '',
                 attemptId: currentAttemptId,
                 participantName,
+                normalizedParticipantName: normalizeStudentName(participantName),
                 startedAt: getAttemptState()?.startedAt || new Date().toISOString(),
                 completedAt: new Date().toISOString(),
                 completed: true,
