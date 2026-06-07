@@ -297,7 +297,6 @@
             </div>
 
             <div class="exam-nav">
-                <button class="btn btn-secondary" onclick="previousQuestion()">السابق</button>
                 <div class="question-dots" id="questionDots"></div>
                 <button class="btn btn-primary" onclick="nextQuestion()" id="nextBtn">التالي</button>
             </div>
@@ -527,7 +526,7 @@
 
         function renderDots() {
             document.getElementById('questionDots').innerHTML = questions.map((_, index) => {
-                return '<div class="q-dot ' + (index === currentQIndex ? 'current' : '') + '" onclick="goToQuestion(' + index + ')" id="dot' + index + '">' + (index + 1) + '</div>';
+                return '<div class="q-dot ' + (index === currentQIndex ? 'current' : '') + '" id="dot' + index + '">' + (index + 1) + '</div>';
             }).join('');
         }
 
@@ -712,21 +711,10 @@
             }, 3000);
         }
 
-        function previousQuestion() {
-            if (currentQIndex === 0) return;
-            clearInterval(timerInterval);
-            showQuestion(currentQIndex - 1);
-        }
-
         function nextQuestion() {
             clearInterval(timerInterval);
             if (currentQIndex < questions.length - 1) showQuestion(currentQIndex + 1);
             else finishExam();
-        }
-
-        function goToQuestion(index) {
-            clearInterval(timerInterval);
-            showQuestion(index);
         }
 
         async function finishExam() {
